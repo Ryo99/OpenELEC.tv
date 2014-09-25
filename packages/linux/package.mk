@@ -17,8 +17,16 @@
 ################################################################################
 
 PKG_NAME="linux"
+case "$LINUX" in
+  imx6)
+    PKG_VERSION="cuboxi-3.14-e85332f"
+    PKG_URL="$DISTRO_SRC/$PKG_NAME-$PKG_VERSION.tar.xz"
+    ;;
+  *)
 PKG_VERSION="3.16.3"
 PKG_URL="http://www.kernel.org/pub/linux/kernel/v3.x/$PKG_NAME-$PKG_VERSION.tar.xz"
+    ;;
+esac
 PKG_REV="1"
 PKG_ARCH="any"
 PKG_LICENSE="GPL"
