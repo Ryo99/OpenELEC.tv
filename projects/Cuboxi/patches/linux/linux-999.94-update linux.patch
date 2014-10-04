@@ -1,0 +1,1243 @@
+From 2b7a4e13c85100f58563f6305a803220a86244ad Mon Sep 17 00:00:00 2001
+From: Rudi <r.ihle@s-t.de>
+Date: Sat, 6 Sep 2014 10:18:04 +0200
+Subject: [PATCH 1/7] video: mxc_hdmi: Use color space converter to limit
+ output color range.
+
+This patch enhances commit:9119f4982209edf12dee44240bcfaa52fba2b4d3 to change
+the actual RGB color range itself. The previous solution would only allow to
+change what is reported to the sink via AVI info frame. Since overriding the
+color range is only supported by devices compliant to CEA-861D (i.e. HDMI1.3),
+the previous method will fail on some TVs (mostly Sony Bravia). This patch
+implements the following behavior:
+
+mode 'full':     range 0..255 indicated via AVI info frame Q1,Q0 = 1,0
+mode 'limited':  range 16..235 indicated via AVI info frame Q1,Q0 = 0,1
+mode 'default':  range 16..235 for CEA modes, range 0..255 for non-CEA Q1,Q0 = 0,0
+
+In DVI mode, the range is always 0..255 and the color space converter is bypassed.
+
+Signed-off-by: Rudi <r.ihle@s-t.de>
+---
+ drivers/video/mxc/mxc_hdmi.c | 28 ++++++++++++++++++++++++----
+ 1 file changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/video/mxc/mxc_hdmi.c b/drivers/video/mxc/mxc_hdmi.c
+index 0aac1e0..2dccbec 100644
+--- a/drivers/video/mxc/mxc_hdmi.c
++++ b/drivers/video/mxc/mxc_hdmi.c
+@@ -493,8 +493,10 @@ static void hdmi_video_sample(struct mxc_hdmi *hdmi)
+ 
+ static int isColorSpaceConversion(struct mxc_hdmi *hdmi)
+ {
+-	return (hdmi->hdmi_data.enc_in_format !=
+-		hdmi->hdmi_data.enc_out_format);
++	return (hdmi->hdmi_data.enc_in_format != hdmi->hdmi_data.enc_out_format) ||
++		(hdmi->hdmi_data.enc_out_format == RGB &&
++		  ((hdmi->hdmi_data.rgb_quant_range == HDMI_FC_AVICONF2_RGB_QUANT_LIMITED_RANGE) ||
++		   (hdmi->hdmi_data.rgb_quant_range == HDMI_FC_AVICONF2_RGB_QUANT_DEFAULT && hdmi->vic > 1)));
+ }
+ 
+ static int isColorSpaceDecimation(struct mxc_hdmi *hdmi)
+@@ -523,7 +525,25 @@ static void update_csc_coeffs(struct mxc_hdmi *hdmi)
+ 
+ 	if (isColorSpaceConversion(hdmi)) { /* csc needed */
+ 		if (hdmi->hdmi_data.enc_out_format == RGB) {
+-			if (hdmi->hdmi_data.colorimetry == eITU601) {
++			if (hdmi->hdmi_data.enc_in_format == RGB) {
++				csc_coeff[0][0] = 0x1b80;
++				csc_coeff[0][1] = 0x0000;
++				csc_coeff[0][2] = 0x0000;
++				csc_coeff[0][3] = 0x0020;
++
++				csc_coeff[1][0] = 0x0000;
++				csc_coeff[1][1] = 0x1b80;
++				csc_coeff[1][2] = 0x0000;
++				csc_coeff[1][3] = 0x0020;
++
++				csc_coeff[2][0] = 0x0000;
++				csc_coeff[2][1] = 0x0000;
++				csc_coeff[2][2] = 0x1b80;
++				csc_coeff[2][3] = 0x0020;
++
++				csc_scale = 1;
++				coeff_selected = true;
++			} else if (hdmi->hdmi_data.colorimetry == eITU601) {
+ 				csc_coeff[0][0] = 0x2000;
+ 				csc_coeff[0][1] = 0x6926;
+ 				csc_coeff[0][2] = 0x74fd;
+@@ -1770,7 +1790,7 @@ static void mxc_hdmi_enable_video_path(struct mxc_hdmi *hdmi)
+ 	hdmi_writeb(clkdis, HDMI_MC_CLKDIS);
+ 
+ 	/* Enable csc path */
+-	if (isColorSpaceConversion(hdmi)) {
++	if (isColorSpaceConversion(hdmi) && !hdmi->hdmi_data.video_mode.mDVI) {
+ 		clkdis &= ~HDMI_MC_CLKDIS_CSCCLK_DISABLE;
+ 		hdmi_writeb(clkdis, HDMI_MC_CLKDIS);
+ 	}
+
+From 52a4fed6518351e9eb08d602eedb2e5ab4334c49 Mon Sep 17 00:00:00 2001
+From: Rudi <r.ihle@s-t.de>
+Date: Sat, 6 Sep 2014 10:40:15 +0200
+Subject: [PATCH 2/7] video: mxc_hdmi: Use symbolic constant instead of 0.
+
+Signed-off-by: Rudi <r.ihle@s-t.de>
+---
+ drivers/video/mxc/mxc_hdmi.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/video/mxc/mxc_hdmi.c b/drivers/video/mxc/mxc_hdmi.c
+index 2dccbec..43ccd29 100644
+--- a/drivers/video/mxc/mxc_hdmi.c
++++ b/drivers/video/mxc/mxc_hdmi.c
+@@ -702,7 +702,7 @@ static void hdmi_video_csc(struct mxc_hdmi *hdmi)
+ {
+ 	int color_depth = 0;
+ 	int interpolation = HDMI_CSC_CFG_INTMODE_DISABLE;
+-	int decimation = 0;
++	int decimation = HDMI_CSC_CFG_DECMODE_DISABLE;
+ 	u8 val;
+ 
+ 	/* YCC422 interpolation to 444 mode */
+
+From 0e08926b85b3357ebfc41828e15705a4f0bd5033 Mon Sep 17 00:00:00 2001
+From: Jon Nettleton <jon.nettleton@gmail.com>
+Date: Tue, 9 Sep 2014 11:11:55 +0200
+Subject: [PATCH 3/7] ASOC: fsl_ssi: remove DMA_RESIDUE flag
+
+This has been fixed in the SDMA driver so this flag is no longer needed.
+---
+ sound/soc/fsl/fsl_ssi.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sound/soc/fsl/fsl_ssi.c b/sound/soc/fsl/fsl_ssi.c
+index 9be24f2..049ba2e 100644
+--- a/sound/soc/fsl/fsl_ssi.c
++++ b/sound/soc/fsl/fsl_ssi.c
+@@ -1551,7 +1551,7 @@ static int fsl_ssi_probe(struct platform_device *pdev)
+ 			if (ret)
+ 				goto error_pcm;
+ 		} else {
+-			ret = imx_pcm_dma_init(pdev, SND_DMAENGINE_PCM_FLAG_NO_RESIDUE,
++			ret = imx_pcm_dma_init(pdev, NULL,
+ 						IMX_SSI_DMABUF_SIZE);
+ 			if (ret)
+ 				goto error_pcm;
+
+From cc713022d2524b498ff4632538117c8e6223fd5f Mon Sep 17 00:00:00 2001
+From: Jon Nettleton <jon.nettleton@gmail.com>
+Date: Thu, 11 Sep 2014 22:36:02 +0200
+Subject: [PATCH 4/7] pcie: imx6: Make no-msi a device-tree property
+
+Currently MSI is not 100% working in the driver.  Rather than
+deal with kernel config options or the kernel cmdline that
+the user/distribution has to set, we flag it in the
+device-tree.
+
+This is the equivalent of setting pci=nomsi on the kernel
+commandline.
+---
+ arch/arm/boot/dts/imx6qdl-hummingboard.dtsi | 39 ++++++++++++++++++++++++++---
+ drivers/pci/host/pci-imx6.c                 |  4 +++
+ 2 files changed, 39 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm/boot/dts/imx6qdl-hummingboard.dtsi b/arch/arm/boot/dts/imx6qdl-hummingboard.dtsi
+index edffb4c..99a09c8 100644
+--- a/arch/arm/boot/dts/imx6qdl-hummingboard.dtsi
++++ b/arch/arm/boot/dts/imx6qdl-hummingboard.dtsi
+@@ -92,6 +92,19 @@
+ 		late_init = <0>;
+ 		status = "okay";
+ 	};
++
++	v4l2_cap_0 {
++		compatible = "fsl,imx6q-v4l2-capture";
++		ipu_id = <0>;
++		csi_id = <1>;
++		mclk_source = <0>;
++		status = "okay";
++	};
++
++	v4l2_out {
++		compatible = "fsl,mxc_v4l2_output";
++		status = "okay";
++	};
+ };
+ 
+ &hdmi_core {
+@@ -117,7 +130,7 @@
+ };
+ 
+ &i2c2 {
+-	clock-frequency = <100000>;
++/*	clock-frequency = <100000>; */
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pinctrl_hummingboard_i2c2>;
+ 	status = "okay";
+@@ -151,14 +164,30 @@
+ 
+ 	/* Pro model */
+ 	sgtl5000: sgtl5000@0a {
+-		clocks = <&clks 201>;
+ 		compatible = "fsl,sgtl5000";
+-		pinctrl-names = "default";
+-		pinctrl-0 = <&pinctrl_hummingboard_sgtl5000>;
+ 		reg = <0x0a>;
++		clocks = <&clks 201>;
++		pinctrl-0 = <&pinctrl_hummingboard_sgtl5000>;
++		pinctrl-names = "default";
+ 		VDDA-supply = <&reg_3p3v>;
+ 		VDDIO-supply = <&reg_3p3v>;
+ 	};
++
++	ov5647_mipi: ov5647_mipi@3e {
++		compatible = "ovti,ov5647_mipi";
++		reg = <0x36>;
++		clocks = <&clks 147>;
++		clock-names = "csi_mclk";
++		DOVDD-supply = <&reg_3p3v>;
++		AVDD-supply = <&reg_3p3v>;
++		DVDD-supply = <&reg_3p3v>;
++		pwn-gpios = <&gpio2 10 0>;
++		ipu_id = <0>;
++		csi_id = <1>;
++		mclk = <22000000>;
++		mclk_source = <0>;
++		pwms = <&pwm4 0 45>;
++	};
+ };
+ 
+ &iomuxc {
+@@ -336,4 +365,6 @@
+ 	>;
+ 	reset-gpio = <&gpio3 4 0>;
+ 	status = "okay";
++	no-msi;
+ };
++
+diff --git a/drivers/pci/host/pci-imx6.c b/drivers/pci/host/pci-imx6.c
+index 2a57425..2dfcf56 100644
+--- a/drivers/pci/host/pci-imx6.c
++++ b/drivers/pci/host/pci-imx6.c
+@@ -29,6 +29,7 @@
+ #include <linux/types.h>
+ #include <linux/busfreq-imx6.h>
+ 
++#include "../pci.h"
+ #include "pcie-designware.h"
+ 
+ #define to_imx6_pcie(x)	container_of(x, struct imx6_pcie, pp)
+@@ -867,6 +868,9 @@ static int __init imx6_pcie_probe(struct platform_device *pdev)
+ 		goto err;
+ 	}
+ 
++        if (of_find_property(np, "no-msi", NULL))
++                pci_no_msi();
++
+ 	if (IS_ENABLED(CONFIG_EP_MODE_IN_EP_RC_SYS)) {
+ 		if (IS_ENABLED(CONFIG_EP_SELF_IO_TEST)) {
+ 			/* Prepare the test regions and data */
+
+From 43c6d1be63a6a32b970652408deef08fa4b179b1 Mon Sep 17 00:00:00 2001
+From: Jon Nettleton <jon.nettleton@gmail.com>
+Date: Tue, 16 Sep 2014 14:31:21 +0200
+Subject: [PATCH 5/7] dts: hummingboard: Revert unrelated dt entries
+
+These were unfinished patches that mistakenly got included
+with the no-msi patch.  Remove them.
+---
+ arch/arm/boot/dts/imx6qdl-hummingboard.dtsi | 35 +++--------------------------
+ 1 file changed, 3 insertions(+), 32 deletions(-)
+
+diff --git a/arch/arm/boot/dts/imx6qdl-hummingboard.dtsi b/arch/arm/boot/dts/imx6qdl-hummingboard.dtsi
+index 99a09c8..c3ad51e 100644
+--- a/arch/arm/boot/dts/imx6qdl-hummingboard.dtsi
++++ b/arch/arm/boot/dts/imx6qdl-hummingboard.dtsi
+@@ -92,19 +92,6 @@
+ 		late_init = <0>;
+ 		status = "okay";
+ 	};
+-
+-	v4l2_cap_0 {
+-		compatible = "fsl,imx6q-v4l2-capture";
+-		ipu_id = <0>;
+-		csi_id = <1>;
+-		mclk_source = <0>;
+-		status = "okay";
+-	};
+-
+-	v4l2_out {
+-		compatible = "fsl,mxc_v4l2_output";
+-		status = "okay";
+-	};
+ };
+ 
+ &hdmi_core {
+@@ -130,7 +117,7 @@
+ };
+ 
+ &i2c2 {
+-/*	clock-frequency = <100000>; */
++	clock-frequency = <100000>;
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pinctrl_hummingboard_i2c2>;
+ 	status = "okay";
+@@ -164,30 +151,14 @@
+ 
+ 	/* Pro model */
+ 	sgtl5000: sgtl5000@0a {
+-		compatible = "fsl,sgtl5000";
+-		reg = <0x0a>;
+ 		clocks = <&clks 201>;
++		compatible = "fsl,sgtl5000";
+ 		pinctrl-0 = <&pinctrl_hummingboard_sgtl5000>;
+ 		pinctrl-names = "default";
++		reg = <0x0a>;
+ 		VDDA-supply = <&reg_3p3v>;
+ 		VDDIO-supply = <&reg_3p3v>;
+ 	};
+-
+-	ov5647_mipi: ov5647_mipi@3e {
+-		compatible = "ovti,ov5647_mipi";
+-		reg = <0x36>;
+-		clocks = <&clks 147>;
+-		clock-names = "csi_mclk";
+-		DOVDD-supply = <&reg_3p3v>;
+-		AVDD-supply = <&reg_3p3v>;
+-		DVDD-supply = <&reg_3p3v>;
+-		pwn-gpios = <&gpio2 10 0>;
+-		ipu_id = <0>;
+-		csi_id = <1>;
+-		mclk = <22000000>;
+-		mclk_source = <0>;
+-		pwms = <&pwm4 0 45>;
+-	};
+ };
+ 
+ &iomuxc {
+
+From 7311833a128054c5f254b8168a8022e7b87db7e8 Mon Sep 17 00:00:00 2001
+From: CurlyMoo <curlymoo1@gmail.com>
+Date: Tue, 16 Sep 2014 15:56:07 +0200
+Subject: [PATCH 6/7] Support for gpio connected ir senders/receivers
+
+This module allows users to use a GPIO connected
+IR receiver and/or sender with LIRC. The module
+uses the sysfs gpio kernel functions to interact
+with the gpio. You can configure the module from
+inside the device tree like this:
+
+lirc_gpio {
+	compatible = "lirc_gpio";
+	gpios = <&gpio3 6 1 &gpio3 7 2>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_hummingboard_gpio3_6>;
+	pinctrl-1 = <&pinctrl_hummingboard_gpio3_7>;
+	linux,sense = <-1>;
+	linux,softcarrier = <1>;
+	linux,validgpios = <1 73 72 71 70 194 195 67>;
+};
+
+It should therefor work on all platforms.
+---
+ drivers/staging/media/lirc/Kconfig     |   6 +
+ drivers/staging/media/lirc/lirc_gpio.c | 782 +++++++++++++++++++++++++++++++++
+ 2 files changed, 788 insertions(+)
+ create mode 100755 drivers/staging/media/lirc/lirc_gpio.c
+
+diff --git a/drivers/staging/media/lirc/Kconfig b/drivers/staging/media/lirc/Kconfig
+index e60a59f..2432475 100644
+--- a/drivers/staging/media/lirc/Kconfig
++++ b/drivers/staging/media/lirc/Kconfig
+@@ -38,6 +38,12 @@ config LIRC_PARALLEL
+ 	help
+ 	  Driver for Homebrew Parallel Port Receivers
+ 
++config LIRC_GPIO
++       tristate "Homebrew GPIO Port Receiver/Transmitter"
++       depends on LIRC
++       help
++         Driver for Homebrew GPIO Port Receiver/Transmitter
++
+ config LIRC_SASEM
+ 	tristate "Sasem USB IR Remote"
+ 	depends on LIRC && USB
+diff --git a/drivers/staging/media/lirc/lirc_gpio.c b/drivers/staging/media/lirc/lirc_gpio.c
+new file mode 100755
+index 0000000..2d34c08
+--- /dev/null
++++ b/drivers/staging/media/lirc/lirc_gpio.c
+@@ -0,0 +1,782 @@
++/*
++ * lirc_gpio.c
++ *
++ * lirc_gpio - Device driver that records pulse- and pause-lengths
++ *	      (space-lengths) (just like the lirc_serial driver does)
++ *	      between GPIO interrupt events on GPIO capable devices.
++ *	      Lots of code has been taken from the lirc_serial and the
++ *	      lirc_rpi modules so I would like say thanks to the authors.
++ *
++ * Copyright (C) 2014 CurlyMo <curlymoo1@gmail.com>
++ *			  Aron Robert Szabo <aron@reon.hu>,
++ *		      Michael Bishop <cleverca22@gmail.com>
++ *  This program is free software; you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation; either version 2 of the License, or
++ *  (at your option) any later version.
++ *
++ *  This program is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with this program; if not, write to the Free Software
++ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ */
++
++/*
++	lirc_gpio {
++		compatible = "lirc_gpio";
++		gpios = <&gpio3 6 1 &gpio3 7 2>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pinctrl_hummingboard_gpio3_6>;
++		pinctrl-1 = <&pinctrl_hummingboard_gpio3_7>;
++		linux,sense = <-1>;
++		linux,softcarrier = <1>;
++		linux,validgpios = <1 73 72 71 70 194 195 67>;
++	};
++ */
++
++ 
++#include <linux/module.h>
++#include <linux/errno.h>
++#include <linux/interrupt.h>
++#include <linux/sched.h>
++#include <linux/kernel.h>
++#include <linux/time.h>
++#include <linux/string.h>
++#include <linux/delay.h>
++#include <linux/platform_device.h>
++#include <linux/irq.h>
++#include <linux/spinlock.h>
++#include <media/lirc.h>
++#include <media/lirc_dev.h>
++#include <linux/gpio.h>
++#include <linux/of.h>
++#include <linux/of_gpio.h>
++
++#define LIRC_DRIVER_NAME "lirc_gpio"
++#define RBUF_LEN 256
++#define LIRC_TRANSMITTER_LATENCY 256
++
++#ifndef MAX_UDELAY_MS
++#define MAX_UDELAY_US 5000
++#else
++#define MAX_UDELAY_US (MAX_UDELAY_MS*1000)
++#endif
++
++static ssize_t lirc_write(struct file *file, const char *buf, size_t n, loff_t *ppos);
++static long lirc_ioctl(struct file *filep, unsigned int cmd, unsigned long arg);
++static int set_use_inc(void *data);
++static void set_use_dec(void *data);
++static int lirc_gpio_probe(struct platform_device *pdev);
++static int lirc_gpio_remove(struct platform_device *pdev);
++
++struct lirc_gpio_platform_data {
++	int		gpio_rx_nr;
++	int		gpio_tx_nr;
++	bool	active_rx_low;
++	bool	active_tx_low;
++	u64		allowed_rx_protos;
++	u64		allowed_tx_protos;
++	int		sense;
++	int		softcarrier;
++	int		validgpios[255];
++};
++
++struct lirc_gpio_dev {
++	int gpio_rx_nr;
++	int gpio_tx_nr;
++	int sense;
++	int softcarrier;
++	int validgpios[255];
++};
++
++struct lirc_gpio_dev *gpio_dev;
++
++static const struct file_operations lirc_fops = {
++	.owner		= THIS_MODULE,
++	.write		= lirc_write,
++	.unlocked_ioctl	= lirc_ioctl,
++	.read		= lirc_dev_fop_read,
++	.poll		= lirc_dev_fop_poll,
++	.open		= lirc_dev_fop_open,
++	.release	= lirc_dev_fop_close,
++	.llseek		= no_llseek,
++};
++
++struct irq_chip *irqchip;
++struct irq_data *irqdata;
++
++static struct timeval lasttv = { 0, 0 };
++static struct lirc_buffer rbuf;
++static spinlock_t lock;
++
++/* set the default GPIO input pin */
++static int gpio_in_pin = -1;
++/* set the default GPIO output pin */
++static int gpio_out_pin = -1;
++/* -1 = auto, 0 = active high, 1 = active low */
++static int sense = -2;
++/* use softcarrier by default */
++static int softcarrier = -1;
++
++/* initialized/set in init_timing_params() */
++static unsigned int freq = 38000;
++static unsigned int duty_cycle = 50;
++static unsigned long period;
++static unsigned long pulse_width;
++static unsigned long space_width;
++
++static struct lirc_driver driver = {
++	.name			= LIRC_DRIVER_NAME,
++	.minor			= -1,
++	.code_length	= 1,
++	.sample_rate	= 0,
++	.data			= NULL,
++	.add_to_buf		= NULL,
++	.rbuf			= &rbuf,
++	.set_use_inc	= set_use_inc,
++	.set_use_dec	= set_use_dec,
++	.fops			= &lirc_fops,
++	.dev			= NULL,
++	.owner			= THIS_MODULE,
++};
++
++static struct of_device_id lirc_gpio_of_match[] = {
++	{ .compatible = "lirc_gpio", },
++	{}
++};
++
++static struct platform_driver lirc_gpio_driver = {
++	.probe  = lirc_gpio_probe,
++	.remove = lirc_gpio_remove,
++	.driver = {
++		.name   = LIRC_DRIVER_NAME,
++		.owner  = THIS_MODULE,
++		.of_match_table = lirc_gpio_of_match,
++	},
++};
++
++static void safe_udelay(unsigned long usecs) {
++	while (usecs > MAX_UDELAY_US) {
++		udelay(MAX_UDELAY_US);
++		usecs -= MAX_UDELAY_US;
++	}
++	udelay(usecs);
++}
++
++static int init_timing_params(unsigned int new_duty_cycle, unsigned int new_freq) {
++	/*
++	 * period, pulse/space width are kept with 8 binary places -
++	 * IE multiplied by 256.
++	 */
++	if(256 * 1000000L / new_freq * new_duty_cycle / 100 <=
++	    LIRC_TRANSMITTER_LATENCY)
++		return -EINVAL;
++	if(256 * 1000000L / new_freq * (100 - new_duty_cycle) / 100 <=
++	    LIRC_TRANSMITTER_LATENCY)
++		return -EINVAL;
++	duty_cycle = new_duty_cycle;
++	freq = new_freq;
++	period = 256 * 1000000L / freq;
++	pulse_width = period * duty_cycle / 100;
++	space_width = period - pulse_width;
++	return 0;
++}
++
++
++static long send_pulse_softcarrier(unsigned long length) {
++	int flag;
++	unsigned long actual, target, d;
++
++	if(gpio_dev->gpio_tx_nr >= 0) {
++		length <<= 8;
++
++		actual = 0; target = 0; flag = 0;
++		while(actual < length) {
++			if(flag) {
++				gpio_set_value(gpio_dev->gpio_tx_nr, 0);
++				target += space_width;
++			} else {
++				gpio_set_value(gpio_dev->gpio_tx_nr, 1);
++				target += pulse_width;
++			}
++			d = (target - actual - LIRC_TRANSMITTER_LATENCY + 128) >> 8;
++			/*
++			 * Note - we've checked in ioctl that the pulse/space
++			 * widths are big enough so that d is > 0
++			 */
++			udelay(d);
++			actual += (d << 8) + LIRC_TRANSMITTER_LATENCY;
++			flag = !flag;
++		}
++		return (actual-length) >> 8;
++	}
++	return 0;
++}
++
++static long send_pulse(unsigned long length) {
++	if(length <= 0)
++		return 0;
++
++	if(gpio_dev->gpio_tx_nr >= 0) {
++		if(gpio_dev->softcarrier) {
++			return send_pulse_softcarrier(length);
++		} else {
++			gpio_set_value(gpio_dev->gpio_tx_nr, 1);
++			safe_udelay(length);
++			return 0;
++		}
++	}
++	return 0;
++}
++
++static void send_space(long length) {
++	if(gpio_dev->gpio_tx_nr >= 0) {
++		gpio_set_value(gpio_dev->gpio_tx_nr, 0);
++		if(length <= 0)
++			return;
++		safe_udelay(length);
++	}
++}
++
++static void rbwrite(int l) {
++	if (lirc_buffer_full(&rbuf)) {
++		/* no new signals will be accepted */
++		return;
++	}
++	lirc_buffer_write(&rbuf, (void *)&l);
++}
++
++static void frbwrite(int l) {
++	/* simple noise filter */
++	static int pulse, space;
++	static unsigned int ptr;
++
++	if(ptr > 0 && (l & PULSE_BIT)) {
++		pulse += l & PULSE_MASK;
++		if(pulse > 250) {
++			rbwrite(space);
++			rbwrite(pulse | PULSE_BIT);
++			ptr = 0;
++			pulse = 0;
++		}
++		return;
++	}
++	if(!(l & PULSE_BIT)) {
++		if(ptr == 0) {
++			if (l > 20000) {
++				space = l;
++				ptr++;
++				return;
++			}
++		} else {
++			if(l > 20000) {
++				space += pulse;
++				if (space > PULSE_MASK)
++					space = PULSE_MASK;
++				space += l;
++				if (space > PULSE_MASK)
++					space = PULSE_MASK;
++				pulse = 0;
++				return;
++			}
++			rbwrite(space);
++			rbwrite(pulse | PULSE_BIT);
++			ptr = 0;
++			pulse = 0;
++		}
++	}
++	rbwrite(l);
++}
++
++static irqreturn_t irq_handler(int i, void *blah, struct pt_regs *regs) {
++	struct timeval tv;
++	long deltv;
++	int data;
++	int signal;
++
++	/* use the GPIO signal level */
++	signal = gpio_get_value(gpio_dev->gpio_rx_nr);
++
++	/* unmask the irq */
++	irqchip->irq_unmask(irqdata);
++
++	if(gpio_dev->sense != -1) {
++		/* The HB GPIO input acts like it is an analogue input.
++		   Therefor a high signal is 256 and a low signal is 1.
++		   For Lirc to properly interpret the spaces and pulses,
++		   we need to transform these to ones and zeros. To be
++		   on the safe side, every signal higher then 128 will
++		   be interpreted as a high and vice versa. */
++		if (signal > 128) {
++			signal = 1;
++		} else {
++			signal = 0;
++		}
++		/* get current time */
++		do_gettimeofday(&tv);
++
++		/* calc time since last interrupt in microseconds */
++		deltv = tv.tv_sec-lasttv.tv_sec;
++		if(tv.tv_sec < lasttv.tv_sec ||
++		    (tv.tv_sec == lasttv.tv_sec &&
++		     tv.tv_usec < lasttv.tv_usec)) {
++			printk(KERN_WARNING LIRC_DRIVER_NAME
++			       ": AIEEEE: your clock just jumped backwards\n");
++			printk(KERN_WARNING LIRC_DRIVER_NAME
++			       ": %d %d %lx %lx %lx %lx\n", signal, gpio_dev->sense,
++			       tv.tv_sec, lasttv.tv_sec,
++			       tv.tv_usec, lasttv.tv_usec);
++			data = PULSE_MASK;
++		} else if (deltv > 15) {
++			data = PULSE_MASK; /* really long time */
++			if(!(signal^gpio_dev->sense)) {
++				/* sanity check */
++				printk(KERN_WARNING LIRC_DRIVER_NAME
++				       ": AIEEEE: %d %d %lx %lx %lx %lx\n",
++				       signal, gpio_dev->sense, tv.tv_sec, lasttv.tv_sec,
++				       tv.tv_usec, lasttv.tv_usec);
++				/*
++				 * detecting pulse while this
++				 * MUST be a space!
++				 */
++				gpio_dev->sense = gpio_dev->sense ? 0 : 1;
++			}
++		} else {
++			data = (int) (deltv*1000000 +
++				      (tv.tv_usec - lasttv.tv_usec));
++		}
++		frbwrite(signal^gpio_dev->sense ? data : (data|PULSE_BIT));
++		lasttv = tv;
++		wake_up_interruptible(&rbuf.wait_poll);
++	}
++
++	return IRQ_HANDLED;
++}
++
++// called when the character device is opened
++static int set_use_inc(void *data) {
++	int result;
++	unsigned long flags;
++
++	/* initialize timestamp */
++	do_gettimeofday(&lasttv);
++
++	if(gpio_dev->gpio_rx_nr >= 0) {
++		result = request_irq(gpio_to_irq(gpio_dev->gpio_rx_nr),
++					 (irq_handler_t) irq_handler, 0,
++					 LIRC_DRIVER_NAME, (void*) 0);
++
++		switch (result) {
++		case -EBUSY:
++			printk(KERN_ERR LIRC_DRIVER_NAME
++				   ": IRQ %d is busy\n",
++				   gpio_to_irq(gpio_dev->gpio_rx_nr));
++			return -EBUSY;
++		case -EINVAL:
++			printk(KERN_ERR LIRC_DRIVER_NAME
++				   ": Bad irq number or handler\n");
++			return -EINVAL;
++		default:
++			break;
++		};
++
++		/* initialize pulse/space widths */
++		init_timing_params(duty_cycle, freq);
++
++		spin_lock_irqsave(&lock, flags);
++
++		/* GPIO Pin Falling/Rising Edge Detect Enable */
++		irqchip->irq_set_type(irqdata,
++					  IRQ_TYPE_EDGE_RISING | IRQ_TYPE_EDGE_FALLING);
++
++		/* unmask the irq */
++		irqchip->irq_unmask(irqdata);
++
++		spin_unlock_irqrestore(&lock, flags);
++	}
++
++	return 0;
++}
++
++static void set_use_dec(void *data) {
++	unsigned long flags;
++	if(gpio_dev->gpio_rx_nr >= 0) {
++		spin_lock_irqsave(&lock, flags);
++
++		/* GPIO Pin Falling/Rising Edge Detect Disable */
++		irqchip->irq_set_type(irqdata, 0);
++		irqchip->irq_mask(irqdata);
++
++		spin_unlock_irqrestore(&lock, flags);
++
++		free_irq(gpio_to_irq(gpio_dev->gpio_rx_nr), (void *) 0);
++	}
++}
++
++static ssize_t lirc_write(struct file *file, const char *buf, size_t n, loff_t *ppos) {
++	int i, count;
++	unsigned long flags;
++	long delta = 0;
++	int *wbuf;
++
++	if(gpio_dev->gpio_tx_nr >= 0) {
++		count = n / sizeof(int);
++		if(n % sizeof(int) || count % 2 == 0)
++			return -EINVAL;
++		wbuf = memdup_user(buf, n);
++		if(IS_ERR(wbuf))
++			return PTR_ERR(wbuf);
++		spin_lock_irqsave(&lock, flags);
++
++		for(i = 0; i < count; i++) {
++			if(i%2)
++				send_space(wbuf[i] - delta);
++			else
++				delta = send_pulse(wbuf[i]);
++		}
++		gpio_set_value(gpio_dev->gpio_tx_nr, 0);
++
++		spin_unlock_irqrestore(&lock, flags);
++		kfree(wbuf);
++		return n;
++	}
++	return 0;
++}
++
++
++static long lirc_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
++	int result;
++	__u32 value;
++
++	switch(cmd) {
++		case LIRC_GET_SEND_MODE:
++			return -ENOIOCTLCMD;
++			break;
++
++		case LIRC_SET_SEND_MODE:
++			result = get_user(value, (__u32 *) arg);
++			if(result)
++				return result;
++			/* only LIRC_MODE_PULSE supported */
++			if(value != LIRC_MODE_PULSE)
++				return -ENOSYS;
++			break;
++
++		case LIRC_GET_LENGTH:
++			return -ENOSYS;
++			break;
++
++		case LIRC_SET_SEND_DUTY_CYCLE:
++			result = get_user(value, (__u32 *) arg);
++			if (result)
++				return result;
++			if (value <= 0 || value > 100)
++				return -EINVAL;
++			return init_timing_params(value, freq);
++			break;
++
++		case LIRC_SET_SEND_CARRIER:
++			result = get_user(value, (__u32 *) arg);
++			if(result)
++				return result;
++			if(value > 500000 || value < 20000)
++				return -EINVAL;
++			return init_timing_params(duty_cycle, value);
++			break;
++
++		default:
++			return lirc_dev_fop_ioctl(filep, cmd, arg);
++	}
++	return 0;
++}
++
++static int lirc_gpio_get_devtree_pdata(struct device *dev, struct lirc_gpio_platform_data *pdata)
++{
++	struct device_node *np = dev->of_node;
++	enum of_gpio_flags flags;
++	struct property *prop;
++	const __be32 *cur;
++	int gpio = -1;
++	int ret = 0;
++	int i = 0;
++
++	if(np) {
++		gpio = of_get_gpio_flags(np, 0, &flags);
++		if(gpio < 0) {
++			if(gpio != -EPROBE_DEFER)
++				dev_err(dev, "RX gpio not defined (%d)\n", gpio);
++
++			pdata->gpio_rx_nr = -1;
++			pdata->active_rx_low = 0;
++			pdata->allowed_rx_protos = 0;
++		} else {
++			pdata->gpio_rx_nr = gpio;
++			pdata->active_rx_low = (flags & OF_GPIO_ACTIVE_LOW);
++			pdata->allowed_rx_protos = 0;
++		}
++
++		gpio = of_get_gpio_flags(np, 1, &flags);
++		if(gpio < 0) {
++			if(gpio != -EPROBE_DEFER)
++				dev_err(dev, "TX gpio not defined (%d)\n", gpio);
++
++			pdata->gpio_tx_nr = -1;
++			pdata->active_tx_low = 0;
++			pdata->allowed_tx_protos = 0;
++		} else {
++			pdata->gpio_tx_nr = gpio;
++			pdata->active_tx_low = (flags & OF_GPIO_ACTIVE_LOW);
++			pdata->allowed_tx_protos = 0;
++		}
++		ret = of_property_read_u32(np, "linux,sense", &pdata->sense);
++		if(ret) {
++			pdata->sense = -1;
++		}
++		ret = of_property_read_u32(np, "linux,softcarrier", &pdata->softcarrier);
++		if(ret) {
++			pdata->softcarrier = 1;
++		}
++		i = 0;
++		printk(KERN_DEBUG LIRC_DRIVER_NAME ": valid gpios");
++		of_property_for_each_u32(np, "linux,validgpios", prop, cur, gpio) {
++			printk(" %d", gpio);
++			pdata->validgpios[i++] = gpio;
++		}
++		printk("\n");
++		pdata->validgpios[i] = -1;
++	}
++
++	return 0;
++}
++
++static int init_port(void) {
++	int i, nlow, nhigh, ret, irq;
++
++	if(gpio_dev->gpio_tx_nr >= 0) {
++		if(gpio_request(gpio_dev->gpio_tx_nr, LIRC_DRIVER_NAME " ir/out")) {
++			printk(KERN_ALERT LIRC_DRIVER_NAME ": cant claim gpio pin %d\n", gpio_dev->gpio_tx_nr);
++			ret = -ENODEV;
++			goto exit_init_port;
++		}
++	}
++
++	if(gpio_dev->gpio_rx_nr >= 0) {
++		if(gpio_request(gpio_dev->gpio_rx_nr, LIRC_DRIVER_NAME " ir/in")) {
++			printk(KERN_ALERT LIRC_DRIVER_NAME ": cant claim gpio pin %d\n", gpio_dev->gpio_rx_nr);
++			ret = -ENODEV;
++			goto exit_gpio_free_out_pin;
++		}
++	}
++
++	if(gpio_dev->gpio_rx_nr >= 0) {	
++		gpio_direction_input(gpio_dev->gpio_rx_nr);
++	}
++	if(gpio_dev->gpio_tx_nr >= 0) {
++		gpio_direction_output(gpio_dev->gpio_tx_nr, 1);
++		gpio_set_value(gpio_dev->gpio_tx_nr, 0);
++	}
++
++	if(gpio_dev->gpio_rx_nr >= 0) {
++		irq = gpio_to_irq(gpio_dev->gpio_rx_nr);
++		irqdata = irq_get_irq_data(irq);
++
++		if(irqdata && irqdata->chip) {
++			irqchip = irqdata->chip;
++		} else {
++			ret = -ENODEV;
++			goto exit_gpio_free_in_pin;
++		}
++
++		/* if pin is high, then this must be an active low receiver. */
++		if(gpio_dev->sense == -1) {
++			/* wait 1/2 sec for the power supply */
++			msleep(500);
++
++			/*
++			 * probe 9 times every 0.04s, collect "votes" for
++			 * active high/low
++			 */
++			nlow = 0;
++			nhigh = 0;
++			for(i = 0; i < 9; i++) {
++				if(gpio_get_value(gpio_dev->gpio_rx_nr))
++					nlow++;
++				else
++					nhigh++;
++				msleep(40);
++			}
++			gpio_dev->sense = (nlow >= nhigh ? 1 : 0);
++			printk(KERN_INFO LIRC_DRIVER_NAME ": auto-detected active %s receiver on GPIO pin %d\n",
++				   gpio_dev->sense ? "low" : "high", gpio_dev->gpio_rx_nr);
++		} else {
++			printk(KERN_INFO LIRC_DRIVER_NAME ": manually using active %s receiver on GPIO pin %d\n",
++				   gpio_dev->sense ? "low" : "high", gpio_dev->gpio_rx_nr);
++		}
++	}
++
++	return 0;
++
++exit_gpio_free_in_pin:
++	gpio_free(gpio_dev->gpio_rx_nr);
++
++exit_gpio_free_out_pin:
++	gpio_free(gpio_dev->gpio_tx_nr);
++
++exit_init_port:
++	return ret;
++}
++
++static void lirc_gpio_exit(void) {
++	if(gpio_dev->gpio_tx_nr >= 0) {
++		gpio_free(gpio_dev->gpio_tx_nr);
++	}
++	if(gpio_dev->gpio_rx_nr >= 0) {
++		gpio_free(gpio_dev->gpio_rx_nr);
++	}
++
++	lirc_unregister_driver(driver.minor);
++	lirc_buffer_free(&rbuf);
++}
++
++static int lirc_gpio_probe(struct platform_device *pdev) {
++	const struct lirc_gpio_platform_data *pdata =
++					pdev->dev.platform_data;
++	int rc;
++	int result = 0;
++	int match = 0;
++	int i = 0;
++
++	if(pdev->dev.of_node) {
++		struct lirc_gpio_platform_data *dtpdata = devm_kzalloc(&pdev->dev, sizeof(*dtpdata), GFP_KERNEL);
++		if(!dtpdata)
++			return -ENOMEM;
++		rc = lirc_gpio_get_devtree_pdata(&pdev->dev, dtpdata);
++		if(rc)
++			return rc;
++		pdata = dtpdata;
++	}
++
++	if(!pdata)
++		return -EINVAL;
++
++	gpio_dev = kzalloc(sizeof(struct lirc_gpio_dev), GFP_KERNEL);
++	if(!gpio_dev)
++		return -ENOMEM;
++
++	gpio_dev->gpio_rx_nr = pdata->gpio_rx_nr;
++	gpio_dev->gpio_tx_nr = pdata->gpio_tx_nr;
++	gpio_dev->sense = pdata->sense;
++	gpio_dev->softcarrier = pdata->softcarrier;
++	memcpy(gpio_dev->validgpios, pdata->validgpios, 255);
++
++	if(gpio_in_pin != gpio_out_pin) {
++		match = 0;
++		for(i = 0; (i < ARRAY_SIZE(gpio_dev->validgpios)) && (!match) && (gpio_dev->validgpios[i] != -1); i++) {
++			if(gpio_in_pin == gpio_dev->validgpios[i]) {
++				match = 1;
++				break;
++			}
++		}
++		if(gpio_in_pin > -1) {
++			if(!match) {
++				printk(KERN_ERR LIRC_DRIVER_NAME
++				   ": invalid RX GPIO pin specified!\n");
++				return -EINVAL;
++			} else {
++				gpio_dev->gpio_rx_nr = gpio_in_pin;
++			}
++		}
++		match = 0;
++		for(i = 0; (i < ARRAY_SIZE(gpio_dev->validgpios)) && (!match) && (gpio_dev->validgpios[i] != -1); i++) {
++			if(gpio_out_pin == gpio_dev->validgpios[i]) {
++				match = 1;
++				break;
++			}
++		}
++		if(gpio_out_pin > -1) {
++			if(!match) {
++				printk(KERN_ERR LIRC_DRIVER_NAME
++				   ": invalid TX GPIO pin specified!\n");
++				return -EINVAL;
++			} else {
++				gpio_dev->gpio_tx_nr = gpio_out_pin;
++			}
++		}	
++	}
++	if(sense > -2) {
++		gpio_dev->sense = sense;
++	}
++	if(softcarrier >= 0) {
++		gpio_dev->softcarrier = softcarrier;
++	}
++	
++	printk(KERN_DEBUG LIRC_DRIVER_NAME ": rx %d, tx %d, sense %d, softcarrier %d\n", 
++		   gpio_dev->gpio_rx_nr, gpio_dev->gpio_tx_nr, gpio_dev->sense, gpio_dev->softcarrier);
++
++	platform_set_drvdata(pdev, gpio_dev);
++
++	result = lirc_buffer_init(&rbuf, sizeof(int), RBUF_LEN);
++	if(result < 0)
++		return -ENOMEM;
++
++	driver.features = LIRC_CAN_SET_SEND_DUTY_CYCLE |
++			  LIRC_CAN_SET_SEND_CARRIER |
++			  LIRC_CAN_SEND_PULSE |
++			  LIRC_CAN_REC_MODE2;
++
++	driver.dev = &pdev->dev;
++	driver.minor = lirc_register_driver(&driver);	
++
++	if(driver.minor < 0) {
++		printk(KERN_ERR LIRC_DRIVER_NAME ": device registration failed with %d\n", result);
++		result = -EIO;
++		goto exit_gpio;
++	}
++
++	result = init_port();
++	if(result < 0)
++		goto exit_gpio;
++
++	return 0;
++
++exit_gpio:
++	lirc_gpio_exit();
++
++	return result;
++}
++
++static int lirc_gpio_remove(struct platform_device *pdev) {
++	struct lirc_gpio_dev *gpio_dev = platform_get_drvdata(pdev);
++
++	lirc_gpio_exit();	
++	
++	kfree(gpio_dev);
++
++	return 0;
++}
++
++MODULE_DEVICE_TABLE(of, lirc_gpio_of_match);
++module_platform_driver(lirc_gpio_driver);
++
++MODULE_DESCRIPTION("Infra-red GPIO receiver and blaster driver.");
++MODULE_AUTHOR("CurlyMo <development@xbian.org>");
++MODULE_AUTHOR("Aron Robert Szabo <aron@reon.hu>");
++MODULE_AUTHOR("Michael Bishop <cleverca22@gmail.com>");
++MODULE_LICENSE("GPL");
++
++module_param(gpio_out_pin, int, S_IRUGO);
++MODULE_PARM_DESC(gpio_out_pin, "GPIO output/transmitter pin number");
++
++module_param(gpio_in_pin, int, S_IRUGO);
++MODULE_PARM_DESC(gpio_in_pin, "GPIO input/receiver pin number.");
++
++module_param(sense, int, S_IRUGO);
++MODULE_PARM_DESC(sense, "Override autodetection of IR receiver circuit"
++		 " (0 = active high, 1 = active low )");
++
++module_param(softcarrier, int, S_IRUGO);
++MODULE_PARM_DESC(softcarrier, "Software carrier (0 = off, 1 = on, default on)");
+\ No newline at end of file
+
+From 59efa6086e1f74c00d01f824a8694926c1187b1a Mon Sep 17 00:00:00 2001
+From: CurlyMoo <curlymoo1@gmail.com>
+Date: Tue, 16 Sep 2014 16:09:48 +0200
+Subject: [PATCH 7/7] Added newline at end of file
+
+---
+ drivers/staging/media/lirc/lirc_gpio.c | 22 +++++++++++-----------
+ 1 file changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/staging/media/lirc/lirc_gpio.c b/drivers/staging/media/lirc/lirc_gpio.c
+index 2d34c08..2b7bb56 100755
+--- a/drivers/staging/media/lirc/lirc_gpio.c
++++ b/drivers/staging/media/lirc/lirc_gpio.c
+@@ -38,7 +38,7 @@
+ 	};
+  */
+ 
+- 
++
+ #include <linux/module.h>
+ #include <linux/errno.h>
+ #include <linux/interrupt.h>
+@@ -494,8 +494,7 @@ static long lirc_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
+ 	return 0;
+ }
+ 
+-static int lirc_gpio_get_devtree_pdata(struct device *dev, struct lirc_gpio_platform_data *pdata)
+-{
++static int lirc_gpio_get_devtree_pdata(struct device *dev, struct lirc_gpio_platform_data *pdata) {
+ 	struct device_node *np = dev->of_node;
+ 	enum of_gpio_flags flags;
+ 	struct property *prop;
+@@ -572,7 +571,7 @@ static int init_port(void) {
+ 		}
+ 	}
+ 
+-	if(gpio_dev->gpio_rx_nr >= 0) {	
++	if(gpio_dev->gpio_rx_nr >= 0) {
+ 		gpio_direction_input(gpio_dev->gpio_rx_nr);
+ 	}
+ 	if(gpio_dev->gpio_tx_nr >= 0) {
+@@ -705,7 +704,7 @@ static int lirc_gpio_probe(struct platform_device *pdev) {
+ 			} else {
+ 				gpio_dev->gpio_tx_nr = gpio_out_pin;
+ 			}
+-		}	
++		}
+ 	}
+ 	if(sense > -2) {
+ 		gpio_dev->sense = sense;
+@@ -713,8 +712,8 @@ static int lirc_gpio_probe(struct platform_device *pdev) {
+ 	if(softcarrier >= 0) {
+ 		gpio_dev->softcarrier = softcarrier;
+ 	}
+-	
+-	printk(KERN_DEBUG LIRC_DRIVER_NAME ": rx %d, tx %d, sense %d, softcarrier %d\n", 
++
++	printk(KERN_DEBUG LIRC_DRIVER_NAME ": rx %d, tx %d, sense %d, softcarrier %d\n",
+ 		   gpio_dev->gpio_rx_nr, gpio_dev->gpio_tx_nr, gpio_dev->sense, gpio_dev->softcarrier);
+ 
+ 	platform_set_drvdata(pdev, gpio_dev);
+@@ -729,7 +728,7 @@ static int lirc_gpio_probe(struct platform_device *pdev) {
+ 			  LIRC_CAN_REC_MODE2;
+ 
+ 	driver.dev = &pdev->dev;
+-	driver.minor = lirc_register_driver(&driver);	
++	driver.minor = lirc_register_driver(&driver);
+ 
+ 	if(driver.minor < 0) {
+ 		printk(KERN_ERR LIRC_DRIVER_NAME ": device registration failed with %d\n", result);
+@@ -752,8 +751,8 @@ static int lirc_gpio_probe(struct platform_device *pdev) {
+ static int lirc_gpio_remove(struct platform_device *pdev) {
+ 	struct lirc_gpio_dev *gpio_dev = platform_get_drvdata(pdev);
+ 
+-	lirc_gpio_exit();	
+-	
++	lirc_gpio_exit();
++
+ 	kfree(gpio_dev);
+ 
+ 	return 0;
+@@ -779,4 +778,5 @@ MODULE_PARM_DESC(sense, "Override autodetection of IR receiver circuit"
+ 		 " (0 = active high, 1 = active low )");
+ 
+ module_param(softcarrier, int, S_IRUGO);
+-MODULE_PARM_DESC(softcarrier, "Software carrier (0 = off, 1 = on, default on)");
+\ No newline at end of file
++MODULE_PARM_DESC(softcarrier, "Software carrier (0 = off, 1 = on, default on)");
++
