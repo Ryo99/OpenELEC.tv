@@ -1,7 +1,7 @@
 From 2b7a4e13c85100f58563f6305a803220a86244ad Mon Sep 17 00:00:00 2001
 From: Rudi <r.ihle@s-t.de>
 Date: Sat, 6 Sep 2014 10:18:04 +0200
-Subject: [PATCH 1/7] video: mxc_hdmi: Use color space converter to limit
+Subject: [PATCH 01/11] video: mxc_hdmi: Use color space converter to limit
  output color range.
 
 This patch enhances commit:9119f4982209edf12dee44240bcfaa52fba2b4d3 to change
@@ -79,7 +79,7 @@ index 0aac1e0..2dccbec 100644
 From 52a4fed6518351e9eb08d602eedb2e5ab4334c49 Mon Sep 17 00:00:00 2001
 From: Rudi <r.ihle@s-t.de>
 Date: Sat, 6 Sep 2014 10:40:15 +0200
-Subject: [PATCH 2/7] video: mxc_hdmi: Use symbolic constant instead of 0.
+Subject: [PATCH 02/11] video: mxc_hdmi: Use symbolic constant instead of 0.
 
 Signed-off-by: Rudi <r.ihle@s-t.de>
 ---
@@ -103,7 +103,7 @@ index 2dccbec..43ccd29 100644
 From 0e08926b85b3357ebfc41828e15705a4f0bd5033 Mon Sep 17 00:00:00 2001
 From: Jon Nettleton <jon.nettleton@gmail.com>
 Date: Tue, 9 Sep 2014 11:11:55 +0200
-Subject: [PATCH 3/7] ASOC: fsl_ssi: remove DMA_RESIDUE flag
+Subject: [PATCH 03/11] ASOC: fsl_ssi: remove DMA_RESIDUE flag
 
 This has been fixed in the SDMA driver so this flag is no longer needed.
 ---
@@ -127,7 +127,7 @@ index 9be24f2..049ba2e 100644
 From cc713022d2524b498ff4632538117c8e6223fd5f Mon Sep 17 00:00:00 2001
 From: Jon Nettleton <jon.nettleton@gmail.com>
 Date: Thu, 11 Sep 2014 22:36:02 +0200
-Subject: [PATCH 4/7] pcie: imx6: Make no-msi a device-tree property
+Subject: [PATCH 04/11] pcie: imx6: Make no-msi a device-tree property
 
 Currently MSI is not 100% working in the driver.  Rather than
 deal with kernel config options or the kernel cmdline that
@@ -241,7 +241,7 @@ index 2a57425..2dfcf56 100644
 From 43c6d1be63a6a32b970652408deef08fa4b179b1 Mon Sep 17 00:00:00 2001
 From: Jon Nettleton <jon.nettleton@gmail.com>
 Date: Tue, 16 Sep 2014 14:31:21 +0200
-Subject: [PATCH 5/7] dts: hummingboard: Revert unrelated dt entries
+Subject: [PATCH 05/11] dts: hummingboard: Revert unrelated dt entries
 
 These were unfinished patches that mistakenly got included
 with the no-msi patch.  Remove them.
@@ -319,7 +319,7 @@ index 99a09c8..c3ad51e 100644
 From 7311833a128054c5f254b8168a8022e7b87db7e8 Mon Sep 17 00:00:00 2001
 From: CurlyMoo <curlymoo1@gmail.com>
 Date: Tue, 16 Sep 2014 15:56:07 +0200
-Subject: [PATCH 6/7] Support for gpio connected ir senders/receivers
+Subject: [PATCH 06/11] Support for gpio connected ir senders/receivers
 
 This module allows users to use a GPIO connected
 IR receiver and/or sender with LIRC. The module
@@ -1155,7 +1155,7 @@ index 0000000..2d34c08
 From 59efa6086e1f74c00d01f824a8694926c1187b1a Mon Sep 17 00:00:00 2001
 From: CurlyMoo <curlymoo1@gmail.com>
 Date: Tue, 16 Sep 2014 16:09:48 +0200
-Subject: [PATCH 7/7] Added newline at end of file
+Subject: [PATCH 07/11] Added newline at end of file
 
 ---
  drivers/staging/media/lirc/lirc_gpio.c | 22 +++++++++++-----------
@@ -1241,3 +1241,135 @@ index 2d34c08..2b7bb56 100755
 \ No newline at end of file
 +MODULE_PARM_DESC(softcarrier, "Software carrier (0 = off, 1 = on, default on)");
 +
+
+From d662e18c29bc4f753d798922704721ccab62d85b Mon Sep 17 00:00:00 2001
+From: Rabeeh Khoury <rabeeh@solid-run.com>
+Date: Wed, 24 Sep 2014 19:23:12 +0300
+Subject: [PATCH 08/11] brcmfmac: kernel oops on wrong ifidx
+
+When calling brcmf_rx_frame() ifidx might not get set and return non zero value.
+Due to that ifp must not be set without proper ifidx otherwise it might get
+a wrong pointer (since ifidx is not set correctly) causing ifp->ndev to access
+an unmapped memory.
+
+The fix initializes ifp to null and in case it doesn't get properly initialized
+the skb will get deallocated in brcmu_pkt_buf_free_skb(skb) afterwards.
+
+Signed-off-by: Rabeeh Khoury <rabeeh@solid-run.com>
+---
+ drivers/net/wireless/brcm80211/brcmfmac/dhd_linux.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/wireless/brcm80211/brcmfmac/dhd_linux.c b/drivers/net/wireless/brcm80211/brcmfmac/dhd_linux.c
+index 09dd8c1..a5c136c 100644
+--- a/drivers/net/wireless/brcm80211/brcmfmac/dhd_linux.c
++++ b/drivers/net/wireless/brcm80211/brcmfmac/dhd_linux.c
+@@ -514,7 +514,7 @@ static void brcmf_rxreorder_process_info(struct brcmf_if *ifp, u8 *reorder_data,
+ 
+ void brcmf_rx_frame(struct device *dev, struct sk_buff *skb)
+ {
+-	struct brcmf_if *ifp;
++	struct brcmf_if *ifp = NULL;
+ 	struct brcmf_bus *bus_if = dev_get_drvdata(dev);
+ 	struct brcmf_pub *drvr = bus_if->drvr;
+ 	struct brcmf_skb_reorder_data *rd;
+@@ -525,7 +525,7 @@ void brcmf_rx_frame(struct device *dev, struct sk_buff *skb)
+ 
+ 	/* process and remove protocol-specific header */
+ 	ret = brcmf_proto_hdrpull(drvr, true, &ifidx, skb);
+-	ifp = drvr->iflist[ifidx];
++	if (!ret) ifp = drvr->iflist[ifidx];
+ 
+ 	if (ret || !ifp || !ifp->ndev) {
+ 		if ((ret != -ENODATA) && ifp)
+
+From 4ef65907dcb1435ab8cf01242bd87231975e8bc9 Mon Sep 17 00:00:00 2001
+From: Rabeeh Khoury <rabeeh@solid-run.com>
+Date: Sun, 28 Sep 2014 20:10:45 +0300
+Subject: [PATCH 09/11] arm: cubox-i and hummingboard defconfig
+
+When CONFIG_JUMP_LABEL=y networking bridge code breaks.
+This was observed on HummingBoard when creating a bridge between wlan0
+and eth0.
+
+Signed-off-by: Rabeeh Khoury <rabeeh@solid-run.com>
+---
+ arch/arm/configs/imx_v7_cbi_hb_defconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm/configs/imx_v7_cbi_hb_defconfig b/arch/arm/configs/imx_v7_cbi_hb_defconfig
+index 78d2570..164c758 100644
+--- a/arch/arm/configs/imx_v7_cbi_hb_defconfig
++++ b/arch/arm/configs/imx_v7_cbi_hb_defconfig
+@@ -4699,7 +4699,7 @@ CONFIG_STACK_TRACER=y
+ CONFIG_KPROBES=y
+ CONFIG_KPROBE_EVENT=y
+ # CONFIG_KPROBES_SANITY_TEST is not set
+-CONFIG_JUMP_LABEL=y
++# CONFIG_JUMP_LABEL is not set
+ CONFIG_OPTPROBES=y
+ 
+ CONFIG_HZ_1000=y
+
+From 0eba97ccc374e3451a5f0447d8e9122cee90a7e6 Mon Sep 17 00:00:00 2001
+From: Arend van Spriel <arend@broadcom.com>
+Date: Thu, 2 Oct 2014 15:57:44 +0200
+Subject: [PATCH 10/11] brcmfmac: deal with NL80211_CHANWIDTH_20_NOHT setting
+
+The driver can get a channel definition with bandwidth set to
+NL80211_CHANWIDTH_20_NOHT. This was no handled in brcmfmac which
+results in a warning splat. One scenario in which this is observed
+was when running hostapd with configuration 'hw_mode=g'.
+
+Cc: Jon Nettleton <jon.nettleton@gmail.com>
+Signed-off-by: Arend van Spriel <arend@broadcom.com>
+---
+ drivers/net/wireless/brcm80211/brcmfmac/wl_cfg80211.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/net/wireless/brcm80211/brcmfmac/wl_cfg80211.c b/drivers/net/wireless/brcm80211/brcmfmac/wl_cfg80211.c
+index 4d0166a..f9d1517 100644
+--- a/drivers/net/wireless/brcm80211/brcmfmac/wl_cfg80211.c
++++ b/drivers/net/wireless/brcm80211/brcmfmac/wl_cfg80211.c
+@@ -352,6 +352,7 @@ static u16 chandef_to_chanspec(struct brcmu_d11inf *d11inf,
+ 	ch_inf.chnum = ieee80211_frequency_to_channel(ch->center_freq1);
+ 	primary_offset = ch->center_freq1 - ch->chan->center_freq;
+ 	switch (ch->width) {
++	case NL80211_CHAN_WIDTH_20_NOHT:
+ 	case NL80211_CHAN_WIDTH_20:
+ 		ch_inf.bw = BRCMU_CHAN_BW_20;
+ 		WARN_ON(primary_offset != 0);
+
+From 91d5e90284ee69d219872e3ae42ae0eac417f7e9 Mon Sep 17 00:00:00 2001
+From: Arend van Spriel <arend@broadcom.com>
+Date: Sat, 21 Jun 2014 12:11:19 +0200
+Subject: [PATCH 11/11] brcmfmac: reduce log level in fwil if firmware returns
+ error
+
+The users of the fwil put an error message in the log so there is
+no need to do the same in the lower level functions in fwil when
+the firmware on the device returns an error. Some errors can be
+ignored for the driver to function and this will avoid driver users
+to point at the low-level error message as potential bug.
+
+Reviewed-by: Hante Meuleman <meuleman@broadcom.com>
+Reviewed-by: Pieter-Paul Giesberts <pieterpg@broadcom.com>
+Signed-off-by: Arend van Spriel <arend@broadcom.com>
+Signed-off-by: John W. Linville <linville@tuxdriver.com>
+---
+ drivers/net/wireless/brcm80211/brcmfmac/fwil.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/brcm80211/brcmfmac/fwil.c b/drivers/net/wireless/brcm80211/brcmfmac/fwil.c
+index 59a5af5..ded328f 100644
+--- a/drivers/net/wireless/brcm80211/brcmfmac/fwil.c
++++ b/drivers/net/wireless/brcm80211/brcmfmac/fwil.c
+@@ -54,7 +54,7 @@ brcmf_fil_cmd_data(struct brcmf_if *ifp, u32 cmd, void *data, u32 len, bool set)
+ 	if (err >= 0)
+ 		err = 0;
+ 	else
+-		brcmf_err("Failed err=%d\n", err);
++		brcmf_dbg(FIL, "Failed err=%d\n", err);
+ 
+ 	return err;
+ }
